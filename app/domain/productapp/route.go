@@ -29,9 +29,15 @@ func Routes(app *web.App, cfg Config) {
 
 	api := newApp(cfg.ProductBus)
 
+	// Product routes
 	app.HandlerFunc(http.MethodGet, version, "/products", api.query, authen, ruleAny)
 	app.HandlerFunc(http.MethodGet, version, "/products/{product_id}", api.queryByID, authen, ruleAuthorizeProduct)
 	app.HandlerFunc(http.MethodPost, version, "/products", api.create, authen, ruleUserOnly)
 	app.HandlerFunc(http.MethodPut, version, "/products/{product_id}", api.update, authen, ruleAuthorizeProduct)
 	app.HandlerFunc(http.MethodDelete, version, "/products/{product_id}", api.delete, authen, ruleAuthorizeProduct)
+
+	// Product variant routes
+	app.HandlerFunc(http.MethodPost, version, "/products/{product_id}/variants", api.createVariant, authen, ruleAuthorizeProduct)
+	app.HandlerFunc(http.MethodPut, version, "/products/variants/{variant_id}", api.updateVariant, authen)
+	app.HandlerFunc(http.MethodDelete, version, "/products/variants/{variant_id}", api.deleteVariant, authen)
 }

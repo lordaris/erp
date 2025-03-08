@@ -44,9 +44,39 @@ func (p ProductStatus) String() string {
 	return p.value
 }
 
-// Equals compares one ProductStatus with another for equality.
-func (p ProductStatus) Equals(ps ProductStatus) bool {
+// Equal provides support for the go-cmp package and testing.
+func (p ProductStatus) Equal(ps ProductStatus) bool {
 	return p.value == ps.value
+}
+
+// Equals is an alias for Equal for backwards compatibility.
+func (p ProductStatus) Equals(ps ProductStatus) bool {
+	return p.Equal(ps)
+}
+
+// MarshalText provides support for logging and any marshal needs.
+func (p ProductStatus) MarshalText() ([]byte, error) {
+	return []byte(p.value), nil
+}
+
+// IsActive returns true if the product status is Active.
+func (p ProductStatus) IsActive() bool {
+	return p.value == Active
+}
+
+// IsDiscontinued returns true if the product status is Discontinued.
+func (p ProductStatus) IsDiscontinued() bool {
+	return p.value == Discontinued
+}
+
+// IsComingSoon returns true if the product status is ComingSoon.
+func (p ProductStatus) IsComingSoon() bool {
+	return p.value == ComingSoon
+}
+
+// IsInactive returns true if the product status is Inactive.
+func (p ProductStatus) IsInactive() bool {
+	return p.value == Inactive
 }
 
 // Parse parses a string into a ProductStatus.
@@ -61,4 +91,20 @@ func MustParse(value string) ProductStatus {
 		panic(err)
 	}
 	return ps
+}
+
+// Values returns a slice of all valid product status values.
+func Values() []string {
+	values := make([]string, 0, len(statuses))
+	for status := range statuses {
+		values = append(values, status)
+	}
+	return values
+}
+
+// Validate checks if a given string is a valid product status.
+func Validate(value string) bool {
+	upValue := strings.ToUpper(strings.TrimSpace(value))
+	_, exists := statuses[upValue]
+	return exists
 }

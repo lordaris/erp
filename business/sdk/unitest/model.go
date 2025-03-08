@@ -3,7 +3,6 @@ package unitest
 import (
 	"context"
 
-	"github.com/lordaris/erp/business/domain/clientbus"
 	"github.com/lordaris/erp/business/domain/homebus"
 	"github.com/lordaris/erp/business/domain/productbus"
 	"github.com/lordaris/erp/business/domain/userbus"
@@ -12,9 +11,8 @@ import (
 // User represents an app user specified for the test.
 type User struct {
 	userbus.User
-	Products  []productbus.Product
-	Homes     []homebus.Home
-	Customers []clientbus.Customer
+	Products []productbus.Product
+	Homes    []homebus.Home
 }
 
 // SeedData represents data that was seeded for the test.
