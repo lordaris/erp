@@ -133,8 +133,7 @@ func (a *app) createVariant(ctx context.Context, r *http.Request) web.Encoder {
 	}
 
 	// Override the productID from path param to ensure it's correct
-	params := web.Params(r)
-	productID := params["product_id"]
+	productID := web.Param(r, "product_id")
 	if productID == "" {
 		return errs.Newf(errs.InvalidArgument, "missing product_id in path")
 	}
@@ -170,8 +169,7 @@ func (a *app) updateVariant(ctx context.Context, r *http.Request) web.Encoder {
 		return errs.New(errs.InvalidArgument, err)
 	}
 
-	params := web.Params(r)
-	variantIDStr := params["variant_id"]
+	variantIDStr := web.Param(r, "variand_id")
 	if variantIDStr == "" {
 		return errs.Newf(errs.InvalidArgument, "missing variant_id in path")
 	}
@@ -199,8 +197,7 @@ func (a *app) updateVariant(ctx context.Context, r *http.Request) web.Encoder {
 
 // deleteVariant removes the product variant identified by a given ID.
 func (a *app) deleteVariant(ctx context.Context, r *http.Request) web.Encoder {
-	params := web.Params(r)
-	variantIDStr := params["variant_id"]
+	variantIDStr := web.Param(r, "variant_id")
 	if variantIDStr == "" {
 		return errs.Newf(errs.InvalidArgument, "missing variant_id in path")
 	}

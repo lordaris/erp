@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lordaris/erp/app/sdk/errs"
 	"github.com/lordaris/erp/app/sdk/mid"
 	"github.com/lordaris/erp/business/domain/productbus"
@@ -149,7 +150,7 @@ func toBusUpdateProduct(app UpdateProduct) (productbus.UpdateProduct, error) {
 	}
 
 	var qnt *quantity.Quantity
-	if app.Cost != nil {
+	if app.Quantity != nil {
 		qn, err := quantity.Parse(*app.Quantity)
 		if err != nil {
 			return productbus.UpdateProduct{}, fmt.Errorf("parse: %w", err)
@@ -164,4 +165,159 @@ func toBusUpdateProduct(app UpdateProduct) (productbus.UpdateProduct, error) {
 	}
 
 	return bus, nil
+}
+
+// ProductVariant represents information about a product variant.
+type ProductVariant struct {
+	ID             string   `json:"id"`
+	ProductID      string   `json:"productID"`
+	SKU            string   `json:"sku"`
+	VariantOptions []string `json:"variantOptions"`
+	Price          float64  `json:"price"`
+	Quantity       int      `json:"quantity"`
+	IsActive       bool     `json:"isActive"`
+	DateCreated    string   `json:"dateCreated"`
+	DateUpdated    string   `json:"dateUpdated"`
+}
+
+// Encode implements the encoder interface.
+func (app ProductVariant) Encode() ([]byte, string, error) {
+	data, err := json.Marshal(app)
+	return data, "application/json", err
+}
+
+func toAppProductVariant(variant productbus.ProductVariant) ProductVariant {
+	return ProductVariant{
+		ID:             variant.ID.String(),
+		ProductID:      variant.ProductID.String(),
+		SKU:            variant.SKU,
+		VariantOptions: variant.VariantOptions,
+		Price:          variant.Price.Value(),
+		Quantity:       variant.Quantity.Value(),
+		IsActive:       variant.IsActive,
+		DateCreated:    variant.DateCreated.Format(time.RFC3339),
+		DateUpdated:    variant.DateUpdated.Format(time.RFC3339),
+	}
+}
+
+func toAppProductVariants(variants []productbus.ProductVariant) []ProductVariant {
+	app := make([]ProductVariant, len(variants))
+	for i, variant := range variants {
+		app[i] = toAppProductVariant(variant)
+	}
+	return app
+}
+
+// =============================================================================
+
+// NewProductVariant defines the data needed to add a new product variant.
+type NewProductVariant struct {
+	ProductID      string   `json:"productID" validate:"required,uuid"`
+	SKU            string   `json:"sku" validate:"required"`
+	VariantOptions []string `json:"variantOptions" validate:"required"`
+	Price          float64  `json:"price" validate:"required,gte=0"`
+	Quantity       int      `json:"quantity" validate:"required,gte=0"`
+	IsActive       bool     `json:"isActive"`
+}
+
+// Decode implements the decoder interface.
+func (app *NewProductVariant) Decode(data []byte) error {
+	return json.Unmarshal(data, app)
+}
+
+// Validate checks the data in the model is considered clean.
+func (app NewProductVariant) Validate() error {
+	if err := errs.Check(app); err != nil {
+		return fmt.Errorf("validate: %w", err)
+	}
+	return nil
+}
+
+func toBusNewProductVariant(app NewProductVariant) (productbus.NewProductVariant, error) {
+	productID, err := uuid.Parse(app.ProductID)
+	if err != nil {
+		return productbus.NewProductVariant{}, fmt.Errorf("parse productID: %w", err)
+	}
+
+	price, err := money.Parse(app.Price)
+	if err != nil {
+		return productbus.NewProductVariant{}, fmt.Errorf("parse price: %w", err)
+	}
+
+	qty, err := quantity.Parse(app.Quantity)
+	if err != nil {
+		return productbus.NewProductVariant{}, fmt.Errorf("parse quantity: %w", err)
+	}
+
+	return productbus.NewProductVariant{
+		ProductID:      productID,
+		SKU:            app.SKU,
+		VariantOptions: productbus.StringArray(app.VariantOptions),
+		Price:          price,
+		Quantity:       qty,
+		IsActive:       app.IsActive,
+	}, nil
+}
+
+// =============================================================================
+
+// UpdateProductVariant defines the data needed to update a product variant.
+type UpdateProductVariant struct {
+	SKU            *string   `json:"sku,omitempty"`
+	VariantOptions *[]string `json:"variantOptions,omitempty"`
+	Price          *float64  `json:"price,omitempty" validate:"omitempty,gte=0"`
+	Quantity       *int      `json:"quantity,omitempty" validate:"omitempty,gte=0"`
+	IsActive       *bool     `json:"isActive,omitempty"`
+}
+
+// Decode implements the decoder interface.
+func (app *UpdateProductVariant) Decode(data []byte) error {
+	return json.Unmarshal(data, app)
+}
+
+// Validate checks the data in the model is considered clean.
+func (app UpdateProductVariant) Validate() error {
+	if err := errs.Check(app); err != nil {
+		return fmt.Errorf("validate: %w", err)
+	}
+	return nil
+}
+
+func toBusUpdateProductVariant(app UpdateProductVariant) (productbus.UpdateProductVariant, error) {
+	var sku *string
+	if app.SKU != nil {
+		sku = app.SKU
+	}
+
+	var variantOptions *productbus.StringArray
+	if app.VariantOptions != nil {
+		vo := productbus.StringArray(*app.VariantOptions)
+		variantOptions = &vo
+	}
+
+	var price *money.Money
+	if app.Price != nil {
+		p, err := money.Parse(*app.Price)
+		if err != nil {
+			return productbus.UpdateProductVariant{}, fmt.Errorf("parse price: %w", err)
+		}
+		price = &p
+	}
+
+	var qty *quantity.Quantity
+	if app.Quantity != nil {
+		q, err := quantity.Parse(*app.Quantity)
+		if err != nil {
+			return productbus.UpdateProductVariant{}, fmt.Errorf("parse quantity: %w", err)
+		}
+		qty = &q
+	}
+
+	return productbus.UpdateProductVariant{
+		SKU:            sku,
+		VariantOptions: variantOptions,
+		Price:          price,
+		Quantity:       qty,
+		IsActive:       app.IsActive,
+	}, nil
 }
