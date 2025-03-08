@@ -14,45 +14,63 @@ CREATE TABLE users (
 	PRIMARY KEY (user_id)
 );
 
-ALTER TABLE products
-ADD COLUMN IF NOT EXISTS sku VARCHAR(100),
-ADD COLUMN IF NOT EXISTS description TEXT,
-ADD COLUMN IF NOT EXISTS category VARCHAR(100),
-ADD COLUMN IF NOT EXISTS subcategory VARCHAR(100),
-ADD COLUMN IF NOT EXISTS upc VARCHAR(100),
-ADD COLUMN IF NOT EXISTS brand VARCHAR(100),
-ADD COLUMN IF NOT EXISTS manufacturer VARCHAR(100),
-ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'active',
-ADD COLUMN IF NOT EXISTS tax_category VARCHAR(100),
-ADD COLUMN IF NOT EXISTS unit_of_measure VARCHAR(50),
-ADD COLUMN IF NOT EXISTS weight DECIMAL(10, 2),
-ADD COLUMN IF NOT EXISTS length DECIMAL(10, 2),
-ADD COLUMN IF NOT EXISTS width DECIMAL(10, 2),
-ADD COLUMN IF NOT EXISTS height DECIMAL(10, 2),
-ADD COLUMN IF NOT EXISTS msrp DECIMAL(10, 2),
-ADD COLUMN IF NOT EXISTS minimum_price DECIMAL(10, 2),
-ADD COLUMN IF NOT EXISTS is_digital BOOLEAN DEFAULT FALSE,
-ADD COLUMN IF NOT EXISTS has_serial_number BOOLEAN DEFAULT FALSE,
-ADD COLUMN IF NOT EXISTS has_lot_number BOOLEAN DEFAULT FALSE,
-ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb,
-ADD COLUMN IF NOT EXISTS image_urls TEXT[] DEFAULT '{}';
-
--- Create product_variants table
-CREATE TABLE IF NOT EXISTS product_variants (
-    variant_id UUID PRIMARY KEY,
-    product_id UUID NOT NULL REFERENCES products(product_id) ON DELETE CASCADE,
-    sku VARCHAR(100) NOT NULL,
-    variant_options TEXT[] NOT NULL DEFAULT '{}',
-    price DECIMAL(10, 2) NOT NULL,
-    quantity INTEGER NOT NULL DEFAULT 0,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    date_created TIMESTAMP WITH TIME ZONE NOT NULL,
-    date_updated TIMESTAMP WITH TIME ZONE NOT NULL
+CREATE TABLE products (
+    product_id         UUID        PRIMARY KEY,
+    user_id            UUID        NOT NULL,
+    sku                VARCHAR(50),
+    name               VARCHAR(100) NOT NULL,
+    description        TEXT,
+    category           VARCHAR(100),
+    subcategory        VARCHAR(100),
+    upc                VARCHAR(14),
+    brand              VARCHAR(100),
+    manufacturer       VARCHAR(100),
+    status             VARCHAR(20) DEFAULT 'ACTIVE',
+    tax_category       VARCHAR(20) DEFAULT 'STANDARD',
+    unit_of_measure    VARCHAR(20) DEFAULT 'EACH',
+    weight             DECIMAL(10,2) DEFAULT 0,
+    length             DECIMAL(10,2) DEFAULT 0,
+    width              DECIMAL(10,2) DEFAULT 0,
+    height             DECIMAL(10,2) DEFAULT 0,
+    msrp               DECIMAL(10,2) DEFAULT 0,
+    cost               DECIMAL(10,2) NOT NULL,
+    minimum_price      DECIMAL(10,2) DEFAULT 0,
+    quantity           INTEGER NOT NULL,
+    is_digital         BOOLEAN DEFAULT FALSE,
+    has_serial_number  BOOLEAN DEFAULT FALSE,
+    has_lot_number     BOOLEAN DEFAULT FALSE,
+    attributes         JSONB DEFAULT '{}',
+    image_urls         JSONB DEFAULT '[]',
+    date_created       TIMESTAMP NOT NULL,
+    date_updated       TIMESTAMP NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS product_variants_product_id_idx ON product_variants(product_id);
-CREATE INDEX IF NOT EXISTS product_variants_sku_idx ON product_variants(sku);-- Version: 1.04
+CREATE TABLE product_variants (
+    variant_id       UUID        PRIMARY KEY,
+    product_id       UUID        NOT NULL,
+    sku              VARCHAR(50) NOT NULL,
+    variant_options  JSONB       NOT NULL,
+    price            DECIMAL(10,2) NOT NULL,
+    quantity         INTEGER     NOT NULL,
+    is_active        BOOLEAN     DEFAULT TRUE,
+    date_created     TIMESTAMP   NOT NULL,
+    date_updated     TIMESTAMP   NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
+);
+
+CREATE INDEX products_sku_idx ON products(sku);
+CREATE INDEX products_upc_idx ON products(upc);
+CREATE INDEX products_category_idx ON products(category);
+CREATE INDEX products_name_idx ON products(name);
+CREATE INDEX product_variants_sku_idx ON product_variants(sku);
+CREATE INDEX product_variants_product_id_idx ON product_variants(product_id);
+
+
+
 -- Description: Create table homes
+
+
 CREATE TABLE homes (
     home_id       UUID       NOT NULL,
     type          TEXT       NOT NULL,

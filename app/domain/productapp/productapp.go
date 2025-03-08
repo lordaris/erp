@@ -1,20 +1,21 @@
+// Package productapp maintains the app layer api for the product domain.
 package productapp
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
-	"github.com/google/uuid"
 	"github.com/lordaris/erp/app/sdk/errs"
 	"github.com/lordaris/erp/app/sdk/mid"
+	"github.com/lordaris/erp/app/sdk/query"
 	"github.com/lordaris/erp/business/domain/productbus"
+	"github.com/lordaris/erp/business/sdk/order"
 	"github.com/lordaris/erp/business/sdk/page"
 	"github.com/lordaris/erp/foundation/web"
 )
 
 type app struct {
-	productbus *productbus.Business
+	productBus *productbus.Business
 }
 
 func newApp(productBus *productbus.Business) *app {
@@ -23,42 +24,63 @@ func newApp(productBus *productbus.Business) *app {
 	}
 }
 
-// Enhanced app implementation to include new product model features
-
-func (a *app) queryBySKU(ctx context.Context, r *http.Request) web.Encoder {
-	sku := web.Param(r, "sku")
-	if sku == "" {
-		return errs.NewFieldErrors("sku", fmt.Errorf("missing sku"))
+func (a *app) create(ctx context.Context, r *http.Request) web.Encoder {
+	var app NewProduct
+	if err := web.Decode(r, &app); err != nil {
+		return errs.New(errs.InvalidArgument, err)
 	}
 
-	prd, err := a.productBus.QueryBySKU(ctx, sku)
+	np, err := toBusNewProduct(ctx, app)
 	if err != nil {
-		return errs.Newf(errs.Internal, "querybysku: %s", err)
+		return errs.New(errs.InvalidArgument, err)
+	}
+
+	prd, err := a.productBus.Create(ctx, np)
+	if err != nil {
+		return errs.Newf(errs.Internal, "create: prd[%+v]: %s", prd, err)
 	}
 
 	return toAppProduct(prd)
 }
 
-func (a *app) queryByUPC(ctx context.Context, r *http.Request) web.Encoder {
-	upc := web.Param(r, "upc")
-	if upc == "" {
-		return errs.NewFieldErrors("upc", fmt.Errorf("missing upc"))
+func (a *app) update(ctx context.Context, r *http.Request) web.Encoder {
+	var app UpdateProduct
+	if err := web.Decode(r, &app); err != nil {
+		return errs.New(errs.InvalidArgument, err)
 	}
 
-	prd, err := a.productBus.QueryByUPC(ctx, upc)
+	up, err := toBusUpdateProduct(app)
 	if err != nil {
-		return errs.Newf(errs.Internal, "querybyupc: %s", err)
+		return errs.New(errs.InvalidArgument, err)
 	}
 
-	return toAppProduct(prd)
+	prd, err := mid.GetProduct(ctx)
+	if err != nil {
+		return errs.Newf(errs.Internal, "product missing in context: %s", err)
+	}
+
+	updPrd, err := a.productBus.Update(ctx, prd, up)
+	if err != nil {
+		return errs.Newf(errs.Internal, "update: productID[%s] up[%+v]: %s", prd.ID, app, err)
+	}
+
+	return toAppProduct(updPrd)
 }
 
-func (a *app) queryByCategory(ctx context.Context, r *http.Request) web.Encoder {
-	categoryName := web.Param(r, "category")
-	if categoryName == "" {
-		return errs.NewFieldErrors("category", fmt.Errorf("missing category"))
+func (a *app) delete(ctx context.Context, _ *http.Request) web.Encoder {
+	prd, err := mid.GetProduct(ctx)
+	if err != nil {
+		return errs.Newf(errs.Internal, "productID missing in context: %s", err)
 	}
 
+	if err := a.productBus.Delete(ctx, prd); err != nil {
+		return errs.Newf(errs.Internal, "delete: productID[%s]: %s", prd.ID, err)
+	}
+
+	return nil
+}
+
+func (a *app) query(ctx context.Context, r *http.Request) web.Encoder {
 	qp := parseQueryParams(r)
 
 	page, err := page.Parse(qp.Page, qp.Rows)
@@ -66,158 +88,34 @@ func (a *app) queryByCategory(ctx context.Context, r *http.Request) web.Encoder 
 		return errs.NewFieldErrors("page", err)
 	}
 
-	prds, err := a.productBus.QueryByCategory(ctx, categoryName, page)
+	filter, err := parseFilter(qp)
 	if err != nil {
-		return errs.Newf(errs.Internal, "querybycategory: %s", err)
+		return err.(*errs.Error)
 	}
 
-	return toAppProducts(prds)
+	orderBy, err := order.Parse(orderByFields, qp.OrderBy, productbus.DefaultOrderBy)
+	if err != nil {
+		return errs.NewFieldErrors("order", err)
+	}
+
+	prds, err := a.productBus.Query(ctx, filter, orderBy, page)
+	if err != nil {
+		return errs.Newf(errs.Internal, "query: %s", err)
+	}
+
+	total, err := a.productBus.Count(ctx, filter)
+	if err != nil {
+		return errs.Newf(errs.Internal, "count: %s", err)
+	}
+
+	return query.NewResult(toAppProducts(prds), total, page)
 }
 
-// Variant operations
-func (a *app) createVariant(ctx context.Context, r *http.Request) web.Encoder {
-	var app NewProductVariant
-	if err := web.Decode(r, &app); err != nil {
-		return errs.New(errs.InvalidArgument, err)
-	}
-
-	nv, err := toBusNewProductVariant(app)
+func (a *app) queryByID(ctx context.Context, r *http.Request) web.Encoder {
+	prd, err := mid.GetProduct(ctx)
 	if err != nil {
-		return errs.New(errs.InvalidArgument, err)
+		return errs.Newf(errs.Internal, "querybyid: %s", err)
 	}
 
-	// Verify the user has access to the product
-	prd, err := a.productBus.QueryByID(ctx, nv.ProductID)
-	if err != nil {
-		return errs.Newf(errs.Internal, "product.querybyid: %s: %w", nv.ProductID, err)
-	}
-
-	userID, err := mid.GetUserID(ctx)
-	if err != nil {
-		return errs.Newf(errs.Internal, "getuserid: %w", err)
-	}
-
-	if prd.UserID != userID {
-		return errs.Newf(errs.Unauthenticated, "user does not own this product")
-	}
-
-	variant, err := a.productBus.CreateVariant(ctx, nv)
-	if err != nil {
-		return errs.Newf(errs.Internal, "create variant: %s", err)
-	}
-
-	return toAppProductVariant(variant)
-}
-
-func (a *app) updateVariant(ctx context.Context, r *http.Request) web.Encoder {
-	var app UpdateProductVariant
-	if err := web.Decode(r, &app); err != nil {
-		return errs.New(errs.InvalidArgument, err)
-	}
-
-	variantID, err := uuid.Parse(web.Param(r, "variant_id"))
-	if err != nil {
-		return errs.NewFieldErrors("variant_id", err)
-	}
-
-	uv, err := toBusUpdateProductVariant(app)
-	if err != nil {
-		return errs.New(errs.InvalidArgument, err)
-	}
-
-	// Get the variant to update
-	variant, err := a.productBus.QueryVariantByID(ctx, variantID)
-	if err != nil {
-		return errs.Newf(errs.Internal, "queryvariantbyid: %s: %w", variantID, err)
-	}
-
-	// Verify the user has access to the product
-	prd, err := a.productBus.QueryByID(ctx, variant.ProductID)
-	if err != nil {
-		return errs.Newf(errs.Internal, "product.querybyid: %s: %w", variant.ProductID, err)
-	}
-
-	userID, err := mid.GetUserID(ctx)
-	if err != nil {
-		return errs.Newf(errs.Internal, "getuserid: %w", err)
-	}
-
-	if prd.UserID != userID {
-		return errs.Newf(errs.Unauthenticated, "user does not own this product")
-	}
-
-	updVariant, err := a.productBus.UpdateVariant(ctx, variant, uv)
-	if err != nil {
-		return errs.Newf(errs.Internal, "update variant: %s", err)
-	}
-
-	return toAppProductVariant(updVariant)
-}
-
-func (a *app) deleteVariant(ctx context.Context, r *http.Request) web.Encoder {
-	variantID, err := uuid.Parse(web.Param(r, "variant_id"))
-	if err != nil {
-		return errs.NewFieldErrors("variant_id", err)
-	}
-
-	// Get the variant to delete
-	variant, err := a.productBus.QueryVariantByID(ctx, variantID)
-	if err != nil {
-		return errs.Newf(errs.Internal, "queryvariantbyid: %s: %w", variantID, err)
-	}
-
-	// Verify the user has access to the product
-	prd, err := a.productBus.QueryByID(ctx, variant.ProductID)
-	if err != nil {
-		return errs.Newf(errs.Internal, "product.querybyid: %s: %w", variant.ProductID, err)
-	}
-
-	userID, err := mid.GetUserID(ctx)
-	if err != nil {
-		return errs.Newf(errs.Internal, "getuserid: %w", err)
-	}
-
-	if prd.UserID != userID {
-		return errs.Newf(errs.Unauthenticated, "user does not own this product")
-	}
-
-	if err := a.productBus.DeleteVariant(ctx, variant); err != nil {
-		return errs.Newf(errs.Internal, "delete variant: %s", err)
-	}
-
-	return nil
-}
-
-func (a *app) queryVariants(ctx context.Context, r *http.Request) web.Encoder {
-	productID, err := uuid.Parse(web.Param(r, "product_id"))
-	if err != nil {
-		return errs.NewFieldErrors("product_id", err)
-	}
-
-	// Verify the user has access to the product
-	prd, err := a.productBus.QueryByID(ctx, productID)
-	if err != nil {
-		return errs.Newf(errs.Internal, "product.querybyid: %s: %w", productID, err)
-	}
-
-	userID, err := mid.GetUserID(ctx)
-	if err != nil {
-		return errs.Newf(errs.Internal, "getuserid: %w", err)
-	}
-
-	if prd.UserID != userID {
-		return errs.Newf(errs.Unauthenticated, "user does not own this product")
-	}
-
-	variants, err := a.productBus.QueryVariantsByProductID(ctx, productID)
-	if err != nil {
-		return errs.Newf(errs.Internal, "queryvariants: %s", err)
-	}
-
-	appVariants := make([]ProductVariant, len(variants))
-	for i, variant := range variants {
-		appVariants[i] = toAppProductVariant(variant)
-	}
-
-	return variants
+	return toAppProduct(prd)
 }
