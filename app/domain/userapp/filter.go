@@ -5,10 +5,10 @@ import (
 	"net/mail"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lordaris/erp/app/sdk/errs"
 	"github.com/lordaris/erp/business/domain/userbus"
 	"github.com/lordaris/erp/business/types/name"
-	"github.com/google/uuid"
 )
 
 type queryParams struct {

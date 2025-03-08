@@ -169,7 +169,7 @@ func (a *app) updateVariant(ctx context.Context, r *http.Request) web.Encoder {
 		return errs.New(errs.InvalidArgument, err)
 	}
 
-	variantIDStr := web.Param(r, "variand_id")
+	variantIDStr := web.Param(r, "variant_id")
 	if variantIDStr == "" {
 		return errs.Newf(errs.InvalidArgument, "missing variant_id in path")
 	}

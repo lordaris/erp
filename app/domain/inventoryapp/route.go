@@ -24,15 +24,14 @@ func Routes(app *web.App, cfg Config) {
 
 	authen := mid.Authenticate(cfg.AuthClient)
 	ruleAny := mid.Authorize(cfg.AuthClient, auth.RuleAny)
-	//	ruleUserOnly := mid.Authorize(cfg.AuthClient, auth.RuleUserOnly)
+	ruleUserOnly := mid.Authorize(cfg.AuthClient, auth.RuleUserOnly)
 	ruleAuthorizeInventory := mid.AuthorizeInventory(cfg.AuthClient, cfg.InventoryBus)
 
 	api := newApp(cfg.InventoryBus)
 
 	app.HandlerFunc(http.MethodGet, version, "/inventories", api.query, authen, ruleAny)
 	app.HandlerFunc(http.MethodGet, version, "/inventories/{inventory_id}", api.queryByID, authen, ruleAuthorizeInventory)
-	// TODO: Modify to use ruleUserOnly instead of ruleAny
-	app.HandlerFunc(http.MethodPost, version, "/inventories", api.create, authen, ruleAny)
+	app.HandlerFunc(http.MethodPost, version, "/inventories", api.create, authen, ruleUserOnly)
 	app.HandlerFunc(http.MethodPut, version, "/inventories/{inventory_id}", api.update, authen, ruleAuthorizeInventory)
 	app.HandlerFunc(http.MethodDelete, version, "/inventories/{inventory_id}", api.delete, authen, ruleAuthorizeInventory)
 }

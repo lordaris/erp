@@ -1,8 +1,6 @@
 package productdb
 
 import (
-	"fmt"
-
 	"github.com/lordaris/erp/business/domain/productbus"
 	"github.com/lordaris/erp/business/sdk/order"
 )
@@ -39,7 +37,9 @@ var orderByFields = map[string]string{
 func orderByClause(orderBy order.By) (string, error) {
 	by, exists := orderByFields[orderBy.Field]
 	if !exists {
-		return "", fmt.Errorf("field %q does not exist", orderBy.Field)
+		// Return default ordering if the field doesn't exist
+		defaultField := orderByFields[productbus.OrderByProductID]
+		return " ORDER BY " + defaultField + " " + order.ASC, nil
 	}
 
 	return " ORDER BY " + by + " " + orderBy.Direction, nil
