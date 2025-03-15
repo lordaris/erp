@@ -415,18 +415,22 @@ func (s *Store) QueryVariantsByProductIDs(ctx context.Context, productIDs []uuid
 	}
 
 	// Convert UUIDs to strings for the query
-	ids := make([]string, len(productIDs))
+	productIDStrs := make([]string, len(productIDs))
 	for i, id := range productIDs {
-		ids[i] = id.String()
+		productIDStrs[i] = id.String()
 	}
 
-	data := map[string]any{
-		"product_ids": ids,
+	// Use the IN clause with parameters
+	data := struct {
+		ProductIDs []string `db:"product_ids"`
+	}{
+		ProductIDs: productIDStrs,
 	}
 
 	const q = `
 	SELECT
-		variant_id, product_id, sku, barcode, variant_options, weight, cost_price, retail_price, current_price, price, quantity, is_active, image_url, created_at, updated_at
+		variant_id, product_id, sku, barcode, variant_options, weight, cost_price, retail_price, 
+		current_price, price, quantity, is_active, image_url, created_at, updated_at
 	FROM
 		product_variants
 	WHERE
@@ -434,7 +438,7 @@ func (s *Store) QueryVariantsByProductIDs(ctx context.Context, productIDs []uuid
 
 	var dbVariants []productVariant
 	if err := sqldb.NamedQuerySliceUsingIn(ctx, s.log, s.db, q, data, &dbVariants); err != nil {
-		return nil, fmt.Errorf("db: %w", err)
+		return nil, fmt.Errorf("querying variants for multiple products: %w", err)
 	}
 
 	return toBusVariants(dbVariants)

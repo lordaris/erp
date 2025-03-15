@@ -2,6 +2,7 @@ package productapp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/lordaris/erp/business/domain/productbus"
 	"github.com/lordaris/erp/business/sdk/order"
 	"github.com/lordaris/erp/business/sdk/page"
+	"github.com/lordaris/erp/business/types/category"
+	"github.com/lordaris/erp/business/types/productstatus"
 	"github.com/lordaris/erp/foundation/web"
 )
 
@@ -39,7 +42,32 @@ func (a *app) create(ctx context.Context, r *http.Request) web.Encoder {
 
 	prd, err := a.productBus.Create(ctx, np)
 	if err != nil {
-		return errs.Newf(errs.Internal, "create: prd[%+v]: %s", prd, err)
+		switch {
+		case errors.Is(err, productbus.ErrUserDisabled):
+			return errs.New(errs.PermissionDenied, err)
+		case errors.Is(err, productbus.ErrInvalidCost):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrCategoryRequired):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrInvalidPricing):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrDuplicateSKU):
+			return errs.New(errs.AlreadyExists, err)
+		case errors.Is(err, productbus.ErrSKUAlreadyExists):
+			return errs.New(errs.AlreadyExists, err)
+		case errors.Is(err, productbus.ErrInvalidBarcode):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrInvalidDimensions):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrRequiredFieldMissing):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrInvalidTaxCategory):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrRelatedProductNotFound):
+			return errs.New(errs.InvalidArgument, err)
+		default:
+			return errs.Newf(errs.Internal, "create: product[%+v]: %s", app, err)
+		}
 	}
 
 	return toAppProduct(prd)
@@ -64,7 +92,36 @@ func (a *app) update(ctx context.Context, r *http.Request) web.Encoder {
 
 	updPrd, err := a.productBus.Update(ctx, prd, up)
 	if err != nil {
-		return errs.Newf(errs.Internal, "update: productID[%s] up[%+v]: %s", prd.ID, app, err)
+		switch {
+		case errors.Is(err, productbus.ErrNotFound):
+			return errs.New(errs.NotFound, err)
+		case errors.Is(err, productbus.ErrUserDisabled):
+			return errs.New(errs.PermissionDenied, err)
+		case errors.Is(err, productbus.ErrProductLocked):
+			return errs.New(errs.FailedPrecondition, err)
+		case errors.Is(err, productbus.ErrProductDiscontinued):
+			return errs.New(errs.FailedPrecondition, err)
+		case errors.Is(err, productbus.ErrInvalidPricing):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrDuplicateSKU):
+			return errs.New(errs.AlreadyExists, err)
+		case errors.Is(err, productbus.ErrInvalidBarcode):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrSKUAlreadyExists):
+			return errs.New(errs.AlreadyExists, err)
+		case errors.Is(err, productbus.ErrInvalidDimensions):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrImageLimitExceeded):
+			return errs.New(errs.ResourceExhausted, err)
+		case errors.Is(err, productbus.ErrIllegalStatusTransition):
+			return errs.New(errs.FailedPrecondition, err)
+		case errors.Is(err, productbus.ErrInvalidTaxCategory):
+			return errs.New(errs.InvalidArgument, err)
+		case errors.Is(err, productbus.ErrRelatedProductNotFound):
+			return errs.New(errs.InvalidArgument, err)
+		default:
+			return errs.Newf(errs.Internal, "update: productID[%s] up[%+v]: %s", prd.ID, app, err)
+		}
 	}
 
 	return toAppProduct(updPrd)
@@ -78,7 +135,22 @@ func (a *app) delete(ctx context.Context, _ *http.Request) web.Encoder {
 	}
 
 	if err := a.productBus.Delete(ctx, prd); err != nil {
-		return errs.Newf(errs.Internal, "delete: productID[%s]: %s", prd.ID, err)
+		switch {
+		case errors.Is(err, productbus.ErrNotFound):
+			return errs.New(errs.NotFound, err)
+		case errors.Is(err, productbus.ErrUserDisabled):
+			return errs.New(errs.PermissionDenied, err)
+		case errors.Is(err, productbus.ErrProductLocked):
+			return errs.New(errs.FailedPrecondition, err)
+		case errors.Is(err, productbus.ErrInsufficientInventory):
+			// Can't delete product with existing inventory
+			return errs.New(errs.FailedPrecondition, err)
+		case errors.Is(err, productbus.ErrProductDiscontinued):
+			// Can return a more specific message that discontinued products need special handling
+			return errs.Newf(errs.FailedPrecondition, "cannot delete discontinued product [%s], archive instead", prd.ID)
+		default:
+			return errs.Newf(errs.Internal, "delete: productID[%s]: %s", prd.ID, err)
+		}
 	}
 
 	return nil
@@ -127,6 +199,7 @@ func (a *app) queryByID(ctx context.Context, r *http.Request) web.Encoder {
 }
 
 // createVariant adds a new product variant.
+
 func (a *app) createVariant(ctx context.Context, r *http.Request) web.Encoder {
 	var app NewProductVariant
 	if err := web.Decode(r, &app); err != nil {
@@ -157,7 +230,24 @@ func (a *app) createVariant(ctx context.Context, r *http.Request) web.Encoder {
 
 	variant, err := a.productBus.CreateVariant(ctx, npv)
 	if err != nil {
-		return errs.Newf(errs.Internal, "create variant: %s", err)
+		switch {
+		case errors.Is(err, productbus.ErrNotFound):
+			return errs.New(errs.NotFound, err)
+		case errors.Is(err, productbus.ErrProductLocked):
+			return errs.New(errs.FailedPrecondition, err)
+		case errors.Is(err, productbus.ErrProductDiscontinued):
+			return errs.New(errs.FailedPrecondition, err)
+		case errors.Is(err, productbus.ErrVariantLimitExceeded):
+			return errs.New(errs.ResourceExhausted, err)
+		case errors.Is(err, productbus.ErrDuplicateSKU):
+			return errs.New(errs.AlreadyExists, err)
+		case errors.Is(err, productbus.ErrSKUAlreadyExists):
+			return errs.New(errs.AlreadyExists, err)
+		case errors.Is(err, productbus.ErrInvalidBarcode):
+			return errs.New(errs.InvalidArgument, err)
+		default:
+			return errs.Newf(errs.Internal, "create variant: %s", err)
+		}
 	}
 
 	return toAppProductVariant(variant)
@@ -219,15 +309,39 @@ func (a *app) deleteVariant(ctx context.Context, r *http.Request) web.Encoder {
 }
 
 // search finds products based on a search term.
+
 func (a *app) search(ctx context.Context, r *http.Request) web.Encoder {
 	searchTerm := r.URL.Query().Get("q")
 	if searchTerm == "" {
 		return errs.Newf(errs.InvalidArgument, "search term is required")
 	}
 
-	// Prepare a filter with search term
+	// Add category and other filters if provided
+	category := r.URL.Query().Get("category")
+	status := r.URL.Query().Get("status")
+	brand := r.URL.Query().Get("brand")
+
+	// Prepare a filter with search term and optional filters
 	filter := productbus.QueryFilter{
 		SearchTerm: &searchTerm,
+	}
+
+	if category != "" {
+		cat, err := categoryFromString(category)
+		if err == nil {
+			filter.Category = &cat
+		}
+	}
+
+	if status != "" {
+		stat, err := statusFromString(status)
+		if err == nil {
+			filter.Status = &stat
+		}
+	}
+
+	if brand != "" {
+		filter.Brand = &brand
 	}
 
 	// Parse page parameters
@@ -239,8 +353,19 @@ func (a *app) search(ctx context.Context, r *http.Request) web.Encoder {
 		return errs.NewFieldErrors("page", err)
 	}
 
-	// Use default order for search results
-	prds, err := a.productBus.Query(ctx, filter, productbus.DefaultOrderBy, pg)
+	// Use default order for search results or specified order
+	orderByStr := r.URL.Query().Get("orderBy")
+	orderBy := productbus.DefaultOrderBy
+	if orderByStr != "" {
+		var err error
+		orderBy, err = order.Parse(orderByFields, orderByStr, productbus.DefaultOrderBy)
+		if err != nil {
+			return errs.NewFieldErrors("order", err)
+		}
+	}
+
+	// The optimized Query method will handle batch loading of variants
+	prds, err := a.productBus.Query(ctx, filter, orderBy, pg)
 	if err != nil {
 		return errs.Newf(errs.Internal, "search: %s", err)
 	}
@@ -251,6 +376,14 @@ func (a *app) search(ctx context.Context, r *http.Request) web.Encoder {
 	}
 
 	return query.NewResult(toAppProducts(prds), total, pg)
+}
+
+func categoryFromString(categoryStr string) (category.Category, error) {
+	return category.Parse(categoryStr)
+}
+
+func statusFromString(statusStr string) (productstatus.ProductStatus, error) {
+	return productstatus.Parse(statusStr)
 }
 
 // addImage adds a new image to a product

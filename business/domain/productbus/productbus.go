@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,14 +16,31 @@ import (
 	"github.com/lordaris/erp/business/sdk/order"
 	"github.com/lordaris/erp/business/sdk/page"
 	"github.com/lordaris/erp/business/sdk/sqldb"
+	"github.com/lordaris/erp/business/types/productstatus"
+	"github.com/lordaris/erp/business/types/taxcategory"
 	"github.com/lordaris/erp/foundation/logger"
 )
 
 // Set of error variables for CRUD operations.
 var (
-	ErrNotFound     = errors.New("product not found")
-	ErrUserDisabled = errors.New("user disabled")
-	ErrInvalidCost  = errors.New("cost not valid")
+	ErrNotFound                = errors.New("product not found")
+	ErrUserDisabled            = errors.New("user disabled")
+	ErrInvalidCost             = errors.New("cost not valid")
+	ErrProductLocked           = errors.New("product is locked for editing")
+	ErrInsufficientInventory   = errors.New("insufficient inventory")
+	ErrProductDiscontinued     = errors.New("product has been discontinued")
+	ErrDuplicateSKU            = errors.New("duplicate SKU")
+	ErrInvalidPricing          = errors.New("invalid pricing structure")
+	ErrCategoryRequired        = errors.New("product category is required")
+	ErrInvalidDimensions       = errors.New("invalid product dimensions")
+	ErrImageLimitExceeded      = errors.New("maximum number of product images exceeded")
+	ErrVariantLimitExceeded    = errors.New("maximum number of product variants exceeded")
+	ErrInvalidBarcode          = errors.New("invalid barcode format")
+	ErrRequiredFieldMissing    = errors.New("required field missing")
+	ErrInvalidTaxCategory      = errors.New("invalid tax category for product type")
+	ErrRelatedProductNotFound  = errors.New("related product not found")
+	ErrSKUAlreadyExists        = errors.New("SKU already exists")
+	ErrIllegalStatusTransition = errors.New("illegal product status transition")
 )
 
 // StringArray is a custom type for storing arrays in PostgreSQL
@@ -148,15 +166,89 @@ func (b *Business) NewWithTx(tx sqldb.CommitRollbacker) (*Business, error) {
 }
 
 // Create adds a new product to the system.
+
 func (b *Business) Create(ctx context.Context, np NewProduct) (Product, error) {
 	// Validate that the provided userID exists and is enabled
 	usr, err := b.userBus.QueryByID(ctx, np.UserID)
 	if err != nil {
+		if errors.Is(err, userbus.ErrNotFound) {
+			return Product{}, fmt.Errorf("query user: %w", err)
+		}
 		return Product{}, fmt.Errorf("query user: %w", err)
 	}
 
 	if !usr.Enabled {
 		return Product{}, ErrUserDisabled
+	}
+
+	// Validate product name
+	if np.Name.String() == "" {
+		return Product{}, fmt.Errorf("%w: name", ErrRequiredFieldMissing)
+	}
+
+	// Validate category
+	if np.Category.String() == "" {
+		return Product{}, ErrCategoryRequired
+	}
+
+	// Validate pricing structure
+	if np.CostPrice.Value() <= 0 {
+		return Product{}, fmt.Errorf("%w: cost price must be positive", ErrInvalidPricing)
+	}
+
+	if np.RetailPrice.Value() < np.CostPrice.Value() {
+		return Product{}, fmt.Errorf("%w: retail price cannot be less than cost price", ErrInvalidPricing)
+	}
+
+	if np.WholesalePrice.Value() > 0 && (np.WholesalePrice.Value() < np.CostPrice.Value() || np.WholesalePrice.Value() > np.RetailPrice.Value()) {
+		return Product{}, fmt.Errorf("%w: wholesale price must be between cost and retail", ErrInvalidPricing)
+	}
+
+	// Validate SKU
+	if np.SKU == "" {
+		return Product{}, fmt.Errorf("%w: SKU", ErrRequiredFieldMissing)
+	}
+
+	// Check for duplicate SKU
+	filter := QueryFilter{
+		SKU: &np.SKU,
+	}
+	count, err := b.storer.Count(ctx, filter)
+	if err != nil {
+		return Product{}, fmt.Errorf("checking SKU: %w", err)
+	}
+	if count > 0 {
+		return Product{}, ErrSKUAlreadyExists
+	}
+
+	// Validate barcode if provided
+	if np.Barcode != "" {
+		if !isValidBarcode(np.Barcode) {
+			return Product{}, ErrInvalidBarcode
+		}
+	}
+
+	// Validate dimensions if physical product
+	if !np.IsDigital {
+		if np.Weight < 0 || np.Length < 0 || np.Width < 0 || np.Height < 0 {
+			return Product{}, ErrInvalidDimensions
+		}
+	}
+
+	// Check related products
+	if np.RelatedProducts != uuid.Nil {
+		_, err := b.storer.QueryByID(ctx, np.RelatedProducts)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return Product{}, ErrRelatedProductNotFound
+			}
+			return Product{}, fmt.Errorf("checking related product: %w", err)
+		}
+	}
+
+	// Validate tax category based on product type
+	if np.IsDigital && np.TaxCategory.String() == taxcategory.Standard {
+		return Product{}, fmt.Errorf("%w: digital products cannot use standard tax category", ErrInvalidTaxCategory)
 	}
 
 	now := time.Now()
@@ -199,14 +291,180 @@ func (b *Business) Create(ctx context.Context, np NewProduct) (Product, error) {
 	}
 
 	if err := b.storer.Create(ctx, prd); err != nil {
+		if errors.Is(err, sqldb.ErrDBDuplicatedEntry) {
+			return Product{}, ErrDuplicateSKU
+		}
 		return Product{}, fmt.Errorf("create: %w", err)
 	}
 
 	return prd, nil
 }
 
+// Checks if a product is administratively locked
+func isProductLocked(prd Product) bool {
+	// A product might be locked if:
+	// 1. It's in a special administrative status
+	// 2. It has specific attributes indicating a lock
+
+	// Example implementation:
+	if lockValue, exists := prd.Attributes["locked"]; exists {
+		if locked, ok := lockValue.(bool); ok && locked {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isValidBarcode(barcode string) bool {
+	// Basic implementation for common barcode formats
+	// In a real system, you'd use a barcode validation library
+
+	// EAN-13 (13 digits)
+	if len(barcode) == 13 && isNumeric(barcode) {
+		return true
+	}
+
+	// UPC-A (12 digits)
+	if len(barcode) == 12 && isNumeric(barcode) {
+		return true
+	}
+
+	// EAN-8 (8 digits)
+	if len(barcode) == 8 && isNumeric(barcode) {
+		return true
+	}
+
+	// Code 39 (variable length with specific characters)
+	if isCode39Format(barcode) {
+		return true
+	}
+
+	return false
+}
+
+// Helper to check if a string is numeric
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// Helper to check Code 39 format
+func isCode39Format(s string) bool {
+	validChars := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-. $/+%"
+	for _, c := range s {
+		if !strings.ContainsRune(validChars, c) {
+			return false
+		}
+	}
+	return true
+}
+
+// Helper function to validate product status transitions
+func isValidStatusTransition(current, new productstatus.ProductStatus) bool {
+	// Define valid transitions
+	validTransitions := map[string][]string{
+		productstatus.Active: {
+			productstatus.Inactive,
+			productstatus.Discontinued,
+		},
+		productstatus.Inactive: {
+			productstatus.Active,
+			productstatus.Discontinued,
+		},
+		productstatus.Discontinued: {
+			// Once discontinued, products can't be changed back
+		},
+		productstatus.ComingSoon: {
+			productstatus.Active,
+			productstatus.Inactive,
+		},
+	}
+
+	// Check if transition is valid
+	for _, validStatus := range validTransitions[current.String()] {
+		if new.String() == validStatus {
+			return true
+		}
+	}
+
+	// Allow transition to same status
+	return current.String() == new.String()
+}
+
 // Update modifies information about a product.
+
 func (b *Business) Update(ctx context.Context, prd Product, up UpdateProduct) (Product, error) {
+	// Check if product is locked
+	if isProductLocked(prd) {
+		return Product{}, ErrProductLocked
+	}
+
+	// Cannot update discontinued products
+	if prd.Status.IsDiscontinued() {
+		return Product{}, ErrProductDiscontinued
+	}
+
+	// Validate product status transition if status is being updated
+	if up.Status != nil && !isValidStatusTransition(prd.Status, *up.Status) {
+		return Product{}, ErrIllegalStatusTransition
+	}
+
+	// SKU validation
+	if up.SKU != nil {
+		if *up.SKU == "" {
+			return Product{}, fmt.Errorf("%w: SKU cannot be empty", ErrRequiredFieldMissing)
+		}
+
+		// Check for duplicate SKU only if changing
+		if *up.SKU != prd.SKU {
+			filter := QueryFilter{
+				SKU: up.SKU,
+			}
+			count, err := b.storer.Count(ctx, filter)
+			if err != nil {
+				return Product{}, fmt.Errorf("checking SKU: %w", err)
+			}
+			if count > 0 {
+				return Product{}, ErrSKUAlreadyExists
+			}
+		}
+	}
+
+	// Barcode validation
+	if up.Barcode != nil && *up.Barcode != "" && !isValidBarcode(*up.Barcode) {
+		return Product{}, ErrInvalidBarcode
+	}
+
+	// Dimension validation
+	if !prd.IsDigital {
+		if (up.Weight != nil && *up.Weight < 0) ||
+			(up.Length != nil && *up.Length < 0) ||
+			(up.Width != nil && *up.Width < 0) ||
+			(up.Height != nil && *up.Height < 0) {
+			return Product{}, ErrInvalidDimensions
+		}
+	}
+
+	// Image limit validation
+	if up.ImageURLs != nil && len(*up.ImageURLs) > 10 {
+		return Product{}, ErrImageLimitExceeded
+	}
+
+	// Pricing validation
+	newCostPrice := prd.CostPrice
+	if up.Cost != nil {
+		if up.Cost.Value() <= 0 {
+			return Product{}, fmt.Errorf("%w: cost price must be positive", ErrInvalidPricing)
+		}
+		newCostPrice = *up.Cost
+	}
+
+	// Process updates
 	if up.SKU != nil {
 		prd.SKU = *up.SKU
 	}
@@ -248,6 +506,10 @@ func (b *Business) Update(ctx context.Context, prd Product, up UpdateProduct) (P
 	}
 
 	if up.TaxCategory != nil {
+		// Validate tax category based on product type
+		if prd.IsDigital && up.TaxCategory.String() == taxcategory.Standard {
+			return Product{}, fmt.Errorf("%w: digital products cannot use standard tax category", ErrInvalidTaxCategory)
+		}
 		prd.TaxCategory = *up.TaxCategory
 	}
 
@@ -273,11 +535,15 @@ func (b *Business) Update(ctx context.Context, prd Product, up UpdateProduct) (P
 
 	// Handle renamed fields mapping correctly
 	if up.Cost != nil {
-		prd.CostPrice = *up.Cost // Map Cost to CostPrice
+		prd.CostPrice = *up.Cost
 	}
 
 	if up.MinimumPrice != nil {
-		prd.WholesalePrice = *up.MinimumPrice // Map MinimumPrice to WholesalePrice
+		// Validate wholesale price
+		if up.MinimumPrice.Value() < newCostPrice.Value() {
+			return Product{}, fmt.Errorf("%w: wholesale price cannot be less than cost price", ErrInvalidPricing)
+		}
+		prd.WholesalePrice = *up.MinimumPrice
 	}
 
 	if up.IsDigital != nil {
@@ -303,6 +569,9 @@ func (b *Business) Update(ctx context.Context, prd Product, up UpdateProduct) (P
 	prd.UpdatedAt = time.Now()
 
 	if err := b.storer.Update(ctx, prd); err != nil {
+		if errors.Is(err, sqldb.ErrDBDuplicatedEntry) {
+			return Product{}, ErrDuplicateSKU
+		}
 		return Product{}, fmt.Errorf("update: %w", err)
 	}
 
@@ -340,56 +609,95 @@ func (b *Business) QueryByID(ctx context.Context, productID uuid.UUID) (Product,
 }
 
 // Optimize Query method to efficiently load variants in batches
+
 func (b *Business) Query(ctx context.Context, filter QueryFilter, orderBy order.By, page page.Page) ([]Product, error) {
+	startTime := time.Now()
+
+	// First, fetch all products with the filter
 	prds, err := b.storer.Query(ctx, filter, orderBy, page)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
 
-	// If no products found, return early
+	queryDuration := time.Since(startTime)
+
+	// Early return if no products found
 	if len(prds) == 0 {
 		return prds, nil
 	}
 
-	// Collect all product IDs
+	startVariantTime := time.Now()
+
+	// Collect all product IDs for a single batch query
 	productIDs := make([]uuid.UUID, len(prds))
 	productMap := make(map[uuid.UUID]*Product)
 
-	for i, p := range prds {
-		productIDs[i] = p.ID
-		productMap[p.ID] = &prds[i]
+	for i := range prds {
+		productIDs[i] = prds[i].ID
+		productMap[prds[i].ID] = &prds[i]
 	}
 
-	// Fetch all variants for these products in a single query
+	// Single batch query for all variants
 	variants, err := b.storer.QueryVariantsByProductIDs(ctx, productIDs)
 	if err != nil {
 		return nil, fmt.Errorf("query variants: %w", err)
 	}
 
-	// Distribute variants to their products
+	// Distribute variants to their respective products
 	for _, v := range variants {
 		if prod, exists := productMap[v.ProductID]; exists {
 			prod.Variants = append(prod.Variants, v)
 		}
 	}
 
+	variantDuration := time.Since(startVariantTime)
+	totalDuration := time.Since(startTime)
+
+	// Log performance metrics
+	b.log.Info(ctx, "product_query_performance",
+		"product_count", len(prds),
+		"variant_count", len(variants),
+		"products_query_ms", queryDuration.Milliseconds(),
+		"variants_query_ms", variantDuration.Milliseconds(),
+		"total_query_ms", totalDuration.Milliseconds(),
+	)
+
 	return prds, nil
 }
 
 // QueryByUserID finds the products by a specified User ID.
+
 func (b *Business) QueryByUserID(ctx context.Context, userID uuid.UUID) ([]Product, error) {
 	prds, err := b.storer.QueryByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
 
-	// Load variants for each product
-	for i, prd := range prds {
-		variants, err := b.storer.QueryVariantsByProductID(ctx, prd.ID)
-		if err != nil {
-			return nil, fmt.Errorf("query variants: productID[%s]: %w", prd.ID, err)
+	// Early return if no products found
+	if len(prds) == 0 {
+		return prds, nil
+	}
+
+	// Collect all product IDs for a single batch query
+	productIDs := make([]uuid.UUID, len(prds))
+	productMap := make(map[uuid.UUID]*Product)
+
+	for i := range prds {
+		productIDs[i] = prds[i].ID
+		productMap[prds[i].ID] = &prds[i]
+	}
+
+	// Single batch query for all variants
+	variants, err := b.storer.QueryVariantsByProductIDs(ctx, productIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query variants: %w", err)
+	}
+
+	// Distribute variants to their respective products
+	for _, v := range variants {
+		if prod, exists := productMap[v.ProductID]; exists {
+			prod.Variants = append(prod.Variants, v)
 		}
-		prds[i].Variants = variants
 	}
 
 	return prds, nil
