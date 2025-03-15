@@ -171,7 +171,7 @@ func run(ctx context.Context, log *logger.Logger) error {
 
 	delegate := delegate.New(log)
 	userBus := userbus.NewBusiness(log, delegate, usercache.NewStore(log, userdb.NewStore(log, db), time.Minute))
-	productBus := productbus.NewBusiness(userBus, delegate, productdb.NewStore(log, db))
+	productBus := productbus.NewBusiness(log, userBus, delegate, productdb.NewStore(log, db))
 
 	// -------------------------------------------------------------------------
 	// Start Debug Service

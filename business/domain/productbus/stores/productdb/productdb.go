@@ -407,3 +407,35 @@ func (s *Store) QueryVariantByID(ctx context.Context, variantID uuid.UUID) (prod
 
 	return toBusVariant(dbVariant)
 }
+
+// QueryVariantsByProductIDs gets all variants for a list of product IDs.
+func (s *Store) QueryVariantsByProductIDs(ctx context.Context, productIDs []uuid.UUID) ([]productbus.ProductVariant, error) {
+	if len(productIDs) == 0 {
+		return []productbus.ProductVariant{}, nil
+	}
+
+	// Convert UUIDs to strings for the query
+	ids := make([]string, len(productIDs))
+	for i, id := range productIDs {
+		ids[i] = id.String()
+	}
+
+	data := map[string]any{
+		"product_ids": ids,
+	}
+
+	const q = `
+	SELECT
+		variant_id, product_id, sku, barcode, variant_options, weight, cost_price, retail_price, current_price, price, quantity, is_active, image_url, created_at, updated_at
+	FROM
+		product_variants
+	WHERE
+		product_id IN (:product_ids)`
+
+	var dbVariants []productVariant
+	if err := sqldb.NamedQuerySliceUsingIn(ctx, s.log, s.db, q, data, &dbVariants); err != nil {
+		return nil, fmt.Errorf("db: %w", err)
+	}
+
+	return toBusVariants(dbVariants)
+}

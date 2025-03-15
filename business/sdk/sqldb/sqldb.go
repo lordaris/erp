@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib" // Register pgx driver
 	"github.com/jmoiron/sqlx"
 	"github.com/lordaris/erp/foundation/logger"
 )
